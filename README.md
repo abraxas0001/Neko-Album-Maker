@@ -8,6 +8,7 @@ A simple and elegant Telegram bot that organizes your media into beautiful album
 - 🎬 **Multiple Media Types** - Support for photos, videos, documents, animations, and audio
 - 🔄 **Auto-Grouping** - Automatically groups media into Telegram albums (max 10 items per group)
 - ⚡ **Smart Detection** - Automatically detects when you're done sending (2-second timeout)
+- 📂 **Database Channel** - Automatically forwards media to a database channel with user info
 
 ## Setup
 
