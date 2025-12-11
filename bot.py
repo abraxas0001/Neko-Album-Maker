@@ -157,6 +157,10 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
 
 def save_media(update: Update, context: CallbackContext):
     msg = update.message
+    if not msg:
+        logger.warning("Received update without message")
+        return
+        
     chat_id = msg.chat_id
     original_caption = msg.caption or ""
 
