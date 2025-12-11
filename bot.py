@@ -119,20 +119,27 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
         user_id = user.id
         
         # Get filename and file size
-        filename = msg.caption or _get_filename(msg, media_type)
+        filename = _get_filename(msg, media_type)
         file_size = _get_file_size(msg, media_type)
         formatted_size = _format_file_size(file_size)
         
         # Get current date
         date_str = datetime.now().strftime("%Y-%m-%d")
-        
-        # Create caption
-        caption = (
+
+        # Build our info block
+        info_block = (
             f"📂 ɴᴀᴍᴇ: {filename}\n"
             f"📦 sɪᴢᴇ: {formatted_size}\n"
             f"👤 ᴜsᴇʀ: {user_name} ({user_id})\n"
             f"📅 ᴅᴀᴛᴇ: {date_str}"
         )
+
+        # Preserve original caption (if any) and then append our info block
+        original_caption = msg.caption or ""
+        if original_caption:
+            caption = f"{original_caption}\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n{info_block}"
+        else:
+            caption = info_block
         
         logger.info(f"Forwarding {media_type} to database channel {DB_CHANNEL_ID}")
         
