@@ -8,6 +8,11 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Callb
 
 load_dotenv()
 
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     print("Error: set TELEGRAM_BOT_TOKEN in environment or .env file")
@@ -17,15 +22,12 @@ DB_CHANNEL_ID = os.getenv("DB_CHANNEL_ID")
 if DB_CHANNEL_ID:
     try:
         DB_CHANNEL_ID = int(DB_CHANNEL_ID)
+        logger.info(f"Database channel configured: {DB_CHANNEL_ID}")
     except ValueError:
         logger.warning("DB_CHANNEL_ID is not a valid integer")
         DB_CHANNEL_ID = None
-
-
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+else:
+    logger.warning("DB_CHANNEL_ID not configured - database forwarding disabled")
 
 
 # In-memory per-chat state
@@ -106,6 +108,7 @@ def _format_file_size(bytes_size):
 def forward_to_database(context: CallbackContext, msg, media_type, file_id):
     """Forward media to database channel with user info"""
     if not DB_CHANNEL_ID:
+        logger.warning("DB_CHANNEL_ID not set - skipping database forward")
         return
     
     try:
@@ -131,6 +134,8 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
             f"📅 ᴅᴀᴛᴇ: {date_str}"
         )
         
+        logger.info(f"Forwarding {media_type} to database channel {DB_CHANNEL_ID}")
+        
         # Forward based on media type
         if media_type == "photo":
             context.bot.send_photo(chat_id=DB_CHANNEL_ID, photo=file_id, caption=caption)
@@ -144,6 +149,8 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
             context.bot.send_audio(chat_id=DB_CHANNEL_ID, audio=file_id, caption=caption)
         elif media_type == "voice":
             context.bot.send_voice(chat_id=DB_CHANNEL_ID, voice=file_id, caption=caption)
+        
+        logger.info(f"Successfully forwarded {media_type} to database channel")
     except Exception as e:
         logger.exception(f"Failed to forward to database channel: {e}")
 
