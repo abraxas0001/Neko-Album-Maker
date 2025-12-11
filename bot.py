@@ -126,7 +126,7 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
         # Get current date
         date_str = datetime.now().strftime("%Y-%m-%d")
 
-        # Build our info block
+        # Build our info block (standardized)
         info_block = (
             f"📂 ɴᴀᴍᴇ: {filename}\n"
             f"📦 sɪᴢᴇ: {formatted_size}\n"
@@ -134,10 +134,23 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
             f"📅 ᴅᴀᴛᴇ: {date_str}"
         )
 
-        # Preserve original caption (if any) and then append our info block
+        # Preserve original caption if present; otherwise send only our info block
         original_caption = msg.caption or ""
         if original_caption:
-            caption = f"{original_caption}\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n{info_block}"
+            lines = original_caption.splitlines()
+            first_line = lines[0]
+            rest_lines = "\n".join(lines[1:]) if len(lines) > 1 else ""
+
+            blocks = [f"📂 original caption: {first_line}", "━━━━━━━━━━━━━━━━━━━━━━"]
+            if rest_lines:
+                blocks.append(rest_lines)
+                blocks.append("━━━━━━━━━━━━━━━━━━━━━━")
+            else:
+                blocks.append("━━━━━━━━━━━━━━━━━━━━━━")
+
+            blocks.append("neko info:")
+            blocks.append(info_block)
+            caption = "\n".join(blocks)
         else:
             caption = info_block
         
