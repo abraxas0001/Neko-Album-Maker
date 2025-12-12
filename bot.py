@@ -117,6 +117,7 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
         if user.last_name:
             user_name += f" {user.last_name}"
         user_id = user.id
+        user_username = user.username
         
         # Get filename and file size
         filename = _get_filename(msg, media_type)
@@ -127,10 +128,15 @@ def forward_to_database(context: CallbackContext, msg, media_type, file_id):
         date_str = datetime.now().strftime("%Y-%m-%d")
 
         # Build our info block (standardized)
+        if user_username:
+            user_line = f"👤 ᴜsᴇʀ: {user_name} (@{user_username}) ({user_id})"
+        else:
+            user_line = f"👤 ᴜsᴇʀ: {user_name} ({user_id})"
+
         info_block = (
             f"📂 ɴᴀᴍᴇ: {filename}\n"
             f"📦 sɪᴢᴇ: {formatted_size}\n"
-            f"👤 ᴜsᴇʀ: {user_name} ({user_id})\n"
+            f"{user_line}\n"
             f"📅 ᴅᴀᴛᴇ: {date_str}"
         )
 
