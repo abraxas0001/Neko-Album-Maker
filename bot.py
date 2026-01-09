@@ -5,6 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ParseMode, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, InputMediaAnimation
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.error import RetryAfter, TimedOut, NetworkError
 
 
 load_dotenv()
@@ -165,19 +166,35 @@ def _build_album_caption(items, date_str):
 
 
 def _send_with_retry(send_func, max_retries=3, delay=2.0):
-    """Retry sending with exponential backoff"""
-    last_error = None
+    """Retry sending with exponential backoff and flood control handling"""
     for attempt in range(max_retries):
         try:
             return send_func()
-        except Exception as e:
-            last_error = e
+        except RetryAfter as e:
+            # Telegram flood control - wait the required time
+            wait_time = e.retry_after + 1  # Add 1 second buffer
+            logger.warning(f"Flood control hit! Waiting {wait_time}s before retry...")
+            time.sleep(wait_time)
+            # Don't count this as a failed attempt, just retry
+            continue
+        except (TimedOut, NetworkError) as e:
+            logger.error(f"Network error on attempt {attempt + 1}/{max_retries}: {e}")
             if attempt < max_retries - 1:
-                wait_time = delay * (2 ** attempt)  # Exponential backoff
-                logger.warning(f"Send failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e}")
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Retrying in {wait_time}s...")
                 time.sleep(wait_time)
             else:
                 logger.exception(f"Failed after {max_retries} attempts: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Send attempt {attempt + 1}/{max_retries} failed: {type(e).__name__}: {e}")
+            if attempt < max_retries - 1:
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                logger.exception(f"Failed after {max_retries} attempts: {e}")
+                return None
     return None
 
 
@@ -188,10 +205,11 @@ def forward_album_to_database(context: CallbackContext, items):
         return
     
     if not items:
+        logger.warning("No items to forward to database")
         return
     
     total_items = len(items)
-    logger.info(f"Starting to forward {total_items} items to database channel")
+    logger.info(f"Starting to forward {total_items} items to database channel {DB_CHANNEL_ID}")
     
     try:
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -245,13 +263,15 @@ def forward_album_to_database(context: CallbackContext, items):
                     failed_count += len(media_group)
                     logger.error(f"✗ Failed album {album_idx}/{total_albums}")
                 
-                # Dynamic delay based on batch size
+                # Dynamic delay based on batch size - increased to avoid flood control
                 if total_albums > 50:
-                    time.sleep(1.0)  # Longer delay for huge batches
+                    time.sleep(3.0)  # Longer delay for huge batches
                 elif total_albums > 20:
-                    time.sleep(0.7)
+                    time.sleep(2.0)
+                elif total_albums > 5:
+                    time.sleep(1.5)
                 else:
-                    time.sleep(0.5)
+                    time.sleep(1.0)  # Minimum 1 second between albums
         
         # Send non-groupable items individually with caption
         for item_idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(non_groupable_items, 1):
@@ -291,7 +311,7 @@ def forward_album_to_database(context: CallbackContext, items):
                 else:
                     failed_count += 1
                 
-                time.sleep(0.4)  # Delay for individual items
+                time.sleep(1.0)  # Delay for individual items to avoid flood control
             except Exception as e:
                 logger.exception(f"Failed to forward {typ} to database channel: {e}")
                 failed_count += 1
