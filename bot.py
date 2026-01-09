@@ -141,25 +141,31 @@ def _build_album_caption(items, date_str):
     caption_parts.append(f"📦 ᴀʟʙᴜᴍ ᴡɪᴛʜ {len(items)} ᴍᴇᴅɪᴀ")
     caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
     
-    # Original captions (if any)
-    original_captions = [item[2] for item in items if item[2]]
+    # Original captions (if any) - limit to first 3 to save space
+    original_captions = [item[2] for item in items if item[2]][:3]
     if original_captions:
         caption_parts.append("📝 ᴏʀɪɢɪɴᴀʟ ᴄᴀᴘᴛɪᴏɴs:")
         caption_parts.append("<blockquote expandable>")
         for cap in original_captions:
-            caption_parts.append(f"• {cap[:100]}")  # Truncate long captions
+            caption_parts.append(f"• {cap[:50]}")  # Truncate to 50 chars
         caption_parts.append("</blockquote>")
         caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
     
     # Neko's Info with file list in expandable blockquote
     caption_parts.append("ɴᴇᴋᴏ's ɪɴғᴏ:")
     caption_parts.append("<blockquote expandable>")
-    for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(items, 1):
+    # Limit to first 5 files to avoid caption overflow
+    display_items = items[:5]
+    for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(display_items, 1):
         formatted_size = _format_file_size(file_size)
-        caption_parts.append(f"📂 ɴᴀᴍᴇ: {filename}")
-        caption_parts.append(f"📦 sɪᴢᴇ: {formatted_size}")
-        if idx < len(items):  # Add separator between files, but not after last one
-            caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
+        # Truncate long filenames
+        short_name = filename[:30] + "..." if len(filename) > 30 else filename
+        caption_parts.append(f"📂 {short_name}")
+        caption_parts.append(f"📦 {formatted_size}")
+        if idx < len(display_items):
+            caption_parts.append("─────────────")
+    if len(items) > 5:
+        caption_parts.append(f"... +{len(items) - 5} more files")
     caption_parts.append("</blockquote>")
     
     # User and date at the end
@@ -168,9 +174,17 @@ def _build_album_caption(items, date_str):
     caption_parts.append(f"📅 ᴅᴀᴛᴇ: {date_str}")
     
     final_caption = "\n".join(caption_parts)
-    # Telegram caption limit is 1024 chars
+    
+    # Telegram caption limit is 1024 chars - ensure we don't break HTML tags
     if len(final_caption) > 1024:
-        final_caption = final_caption[:1020] + "..."
+        # Build a shorter version without file details
+        short_parts = []
+        short_parts.append(f"📦 ᴀʟʙᴜᴍ ᴡɪᴛʜ {len(items)} ᴍᴇᴅɪᴀ")
+        short_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
+        short_parts.append(user_line)
+        short_parts.append(f"📅 ᴅᴀᴛᴇ: {date_str}")
+        final_caption = "\n".join(short_parts)
+    
     return final_caption
 
 
