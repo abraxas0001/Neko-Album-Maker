@@ -136,27 +136,36 @@ def _build_album_caption(items, date_str):
         user_line = f"👤 ᴜsᴇʀ: {first_user['name']} ({first_user['id']})"
     
     caption_parts = []
+    
+    # Album count at the top
     caption_parts.append(f"📦 ᴀʟʙᴜᴍ ᴡɪᴛʜ {len(items)} ᴍᴇᴅɪᴀ")
     caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
     
-    # Add file list in expandable blockquote
+    # Original captions (if any)
+    original_captions = [item[2] for item in items if item[2]]
+    if original_captions:
+        caption_parts.append("📝 ᴏʀɪɢɪɴᴀʟ ᴄᴀᴘᴛɪᴏɴs:")
+        caption_parts.append("<blockquote expandable>")
+        for cap in original_captions:
+            caption_parts.append(f"• {cap[:100]}")  # Truncate long captions
+        caption_parts.append("</blockquote>")
+        caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
+    
+    # Neko's Info with file list in expandable blockquote
+    caption_parts.append("ɴᴇᴋᴏ's ɪɴғᴏ:")
     caption_parts.append("<blockquote expandable>")
     for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(items, 1):
         formatted_size = _format_file_size(file_size)
-        caption_parts.append(f"{idx}. {filename} ({formatted_size})")
+        caption_parts.append(f"📂 ɴᴀᴍᴇ: {filename}")
+        caption_parts.append(f"📦 sɪᴢᴇ: {formatted_size}")
+        if idx < len(items):  # Add separator between files, but not after last one
+            caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
     caption_parts.append("</blockquote>")
     
+    # User and date at the end
     caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
     caption_parts.append(user_line)
     caption_parts.append(f"📅 ᴅᴀᴛᴇ: {date_str}")
-    
-    # Check for original captions
-    original_captions = [item[2] for item in items if item[2]]
-    if original_captions:
-        caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
-        caption_parts.append("📝 ᴏʀɪɢɪɴᴀʟ ᴄᴀᴘᴛɪᴏɴs:")
-        for cap in original_captions[:3]:  # Limit to first 3 to avoid caption length limit
-            caption_parts.append(f"• {cap[:100]}")  # Truncate long captions
     
     final_caption = "\n".join(caption_parts)
     # Telegram caption limit is 1024 chars
@@ -469,22 +478,18 @@ def send_media_as_album(context: CallbackContext, chat_id: int):
         chunk = groupable_items[i:i + chunk_size]
         media_group = []
         
-        # Get caption from first item that has one, use it as album caption
-        album_caption = None
-        for item in chunk:
-            if item[2]:  # original_caption at index 2
-                album_caption = item[2]
-                break
+        # Use Neko Album Maker caption with clickable link
+        neko_caption = '<a href="https://t.me/NekoAlbumMakerbot"><b>💜 Neko Album Maker</b></a>'
         
         for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(chunk):
             try:
                 # Only first item gets caption (becomes album caption)
-                caption = album_caption if idx == 0 else None
+                caption = neko_caption if idx == 0 else None
                 
                 if typ == "photo":
-                    media_group.append(InputMediaPhoto(media=file_id, caption=caption))
+                    media_group.append(InputMediaPhoto(media=file_id, caption=caption, parse_mode='HTML'))
                 elif typ == "video":
-                    media_group.append(InputMediaVideo(media=file_id, caption=caption))
+                    media_group.append(InputMediaVideo(media=file_id, caption=caption, parse_mode='HTML'))
             except Exception as e:
                 logger.exception("Failed to prepare media: %s", e)
         
@@ -499,14 +504,17 @@ def send_media_as_album(context: CallbackContext, chat_id: int):
     # Send non-groupable items individually
     for typ, file_id, original_caption, filename, file_size, user_info in non_groupable_items:
         try:
+            # Use Neko Album Maker caption for non-groupable items too
+            neko_caption = '<a href="https://t.me/NekoAlbumMakerbot"><b>💜 Neko Album Maker</b></a>'
+            
             if typ == "document":
-                context.bot.send_document(chat_id=chat_id, document=file_id, caption=original_caption)
+                context.bot.send_document(chat_id=chat_id, document=file_id, caption=neko_caption, parse_mode='HTML')
             elif typ == "animation":
-                context.bot.send_animation(chat_id=chat_id, animation=file_id, caption=original_caption)
+                context.bot.send_animation(chat_id=chat_id, animation=file_id, caption=neko_caption, parse_mode='HTML')
             elif typ == "audio":
-                context.bot.send_audio(chat_id=chat_id, audio=file_id, caption=original_caption)
+                context.bot.send_audio(chat_id=chat_id, audio=file_id, caption=neko_caption, parse_mode='HTML')
             elif typ == "voice":
-                context.bot.send_voice(chat_id=chat_id, voice=file_id, caption=original_caption)
+                context.bot.send_voice(chat_id=chat_id, voice=file_id, caption=neko_caption, parse_mode='HTML')
             time.sleep(0.2)
         except Exception as e:
             logger.exception(f"Failed to send {typ}: %s", e)
