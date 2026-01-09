@@ -166,23 +166,23 @@ def _build_album_caption(items, date_str):
 
 def _send_with_retry(send_func, max_retries=3, delay=2.0):
     """Retry sending with exponential backoff"""
+    last_error = None
     for attempt in range(max_retries):
         try:
-            send_func()
-            return True
+            return send_func()
         except Exception as e:
+            last_error = e
             if attempt < max_retries - 1:
                 wait_time = delay * (2 ** attempt)  # Exponential backoff
                 logger.warning(f"Send failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {e}")
                 time.sleep(wait_time)
             else:
                 logger.exception(f"Failed after {max_retries} attempts: {e}")
-                return False
-    return False
+    return None
 
 
-def forward_album_to_database(context: CallbackContext, items, chat_id=None):
-    """Forward media as album to database channel with retry logic and progress tracking"""
+def forward_album_to_database(context: CallbackContext, items):
+    """Forward media as album to database channel with retry logic"""
     if not DB_CHANNEL_ID:
         logger.warning("DB_CHANNEL_ID not set - skipping database forward")
         return
@@ -234,25 +234,16 @@ def forward_album_to_database(context: CallbackContext, items, chat_id=None):
                     failed_count += 1
             
             if media_group:
-                def send_album():
-                    context.bot.send_media_group(chat_id=DB_CHANNEL_ID, media=media_group)
+                # Create a copy for the closure to avoid reference issues
+                media_to_send = list(media_group)
+                result = _send_with_retry(lambda mg=media_to_send: context.bot.send_media_group(chat_id=DB_CHANNEL_ID, media=mg))
                 
-                success = _send_with_retry(send_album)
-                if success:
+                if result is not None:
                     sent_count += len(media_group)
                     logger.info(f"✓ Forwarded album {album_idx}/{total_albums} ({len(media_group)} items) to database channel")
-                    
-                    # Progress update to user every 5 albums for large batches
-                    if chat_id and total_albums > 10 and album_idx % 5 == 0:
-                        try:
-                            context.bot.send_message(
-                                chat_id=chat_id,
-                                text=f"📤 Progress: {sent_count}/{total_items} items forwarded to database..."
-                            )
-                        except Exception:
-                            pass
                 else:
                     failed_count += len(media_group)
+                    logger.error(f"✗ Failed album {album_idx}/{total_albums}")
                 
                 # Dynamic delay based on batch size
                 if total_albums > 50:
@@ -282,18 +273,19 @@ def forward_album_to_database(context: CallbackContext, items, chat_id=None):
                 if original_caption:
                     caption = f"📝 ᴄᴀᴘᴛɪᴏɴ: {original_caption[:200]}\n━━━━━━━━━━━━━━━━━━━━━━\n{caption}"
                 
-                def send_item():
-                    if typ == "document":
-                        context.bot.send_document(chat_id=DB_CHANNEL_ID, document=file_id, caption=caption)
-                    elif typ == "animation":
-                        context.bot.send_animation(chat_id=DB_CHANNEL_ID, animation=file_id, caption=caption)
-                    elif typ == "audio":
-                        context.bot.send_audio(chat_id=DB_CHANNEL_ID, audio=file_id, caption=caption)
-                    elif typ == "voice":
-                        context.bot.send_voice(chat_id=DB_CHANNEL_ID, voice=file_id, caption=caption)
+                # Use default argument to capture current values
+                if typ == "document":
+                    result = _send_with_retry(lambda fid=file_id, cap=caption: context.bot.send_document(chat_id=DB_CHANNEL_ID, document=fid, caption=cap))
+                elif typ == "animation":
+                    result = _send_with_retry(lambda fid=file_id, cap=caption: context.bot.send_animation(chat_id=DB_CHANNEL_ID, animation=fid, caption=cap))
+                elif typ == "audio":
+                    result = _send_with_retry(lambda fid=file_id, cap=caption: context.bot.send_audio(chat_id=DB_CHANNEL_ID, audio=fid, caption=cap))
+                elif typ == "voice":
+                    result = _send_with_retry(lambda fid=file_id, cap=caption: context.bot.send_voice(chat_id=DB_CHANNEL_ID, voice=fid, caption=cap))
+                else:
+                    result = None
                 
-                success = _send_with_retry(send_item)
-                if success:
+                if result is not None:
                     sent_count += 1
                     logger.info(f"✓ Forwarded {typ} ({item_idx}/{len(non_groupable_items)}) to database channel")
                 else:
@@ -304,24 +296,8 @@ def forward_album_to_database(context: CallbackContext, items, chat_id=None):
                 logger.exception(f"Failed to forward {typ} to database channel: {e}")
                 failed_count += 1
         
-        # Final summary
+        # Final summary (log only, no user notification)
         logger.info(f"✓ Database forwarding complete: {sent_count}/{total_items} sent, {failed_count} failed")
-        
-        # Send completion message to user
-        if chat_id:
-            try:
-                if failed_count > 0:
-                    context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"✅ Forwarded {sent_count}/{total_items} items to database\n⚠️ {failed_count} items failed"
-                    )
-                else:
-                    context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"✅ All {sent_count} items successfully forwarded to database!"
-                    )
-            except Exception:
-                pass
     
     except Exception as e:
         logger.exception(f"Failed to forward album to database channel: {e}")
@@ -438,9 +414,9 @@ def handle_text(update: Update, context: CallbackContext):
             # Send album to user
             send_media_as_album(context, chat_id)
             
-            # Forward to database channel as album with progress tracking
+            # Forward to database channel as album (silently, no user notification)
             items_copy = list(items)  # Copy before clearing
-            forward_album_to_database(context, items_copy, chat_id=chat_id)
+            forward_album_to_database(context, items_copy)
         else:
             update.message.reply_text("No media found. Send media first.")
         return
