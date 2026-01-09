@@ -174,31 +174,34 @@ def _build_album_caption(items, date_str):
     return final_caption
 
 
-def _send_with_retry(send_func, max_retries=3, delay=2.0):
+def _send_with_retry(send_func, max_retries=5, delay=2.0):
     """Retry sending with exponential backoff and flood control handling"""
-    for attempt in range(max_retries):
+    attempt = 0
+    while attempt < max_retries:
         try:
             return send_func()
         except RetryAfter as e:
-            # Telegram flood control - wait the required time
-            wait_time = e.retry_after + 1  # Add 1 second buffer
+            # Telegram flood control - wait the required time (don't count as failed attempt)
+            wait_time = e.retry_after + 2  # Add 2 second buffer
             logger.warning(f"Flood control hit! Waiting {wait_time}s before retry...")
             time.sleep(wait_time)
-            # Don't count this as a failed attempt, just retry
+            # Don't increment attempt - flood control waits are free retries
             continue
         except (TimedOut, NetworkError) as e:
-            logger.error(f"Network error on attempt {attempt + 1}/{max_retries}: {e}")
-            if attempt < max_retries - 1:
-                wait_time = delay * (2 ** attempt)
+            attempt += 1
+            logger.error(f"Network error on attempt {attempt}/{max_retries}: {e}")
+            if attempt < max_retries:
+                wait_time = delay * (2 ** (attempt - 1))
                 logger.warning(f"Retrying in {wait_time}s...")
                 time.sleep(wait_time)
             else:
                 logger.exception(f"Failed after {max_retries} attempts: {e}")
                 return None
         except Exception as e:
-            logger.error(f"Send attempt {attempt + 1}/{max_retries} failed: {type(e).__name__}: {e}")
-            if attempt < max_retries - 1:
-                wait_time = delay * (2 ** attempt)
+            attempt += 1
+            logger.error(f"Send attempt {attempt}/{max_retries} failed: {type(e).__name__}: {e}")
+            if attempt < max_retries:
+                wait_time = delay * (2 ** (attempt - 1))
                 logger.warning(f"Retrying in {wait_time}s...")
                 time.sleep(wait_time)
             else:
