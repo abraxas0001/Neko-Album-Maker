@@ -1,8 +1,9 @@
 import logging
 import os
+import time
 from datetime import datetime
 from dotenv import load_dotenv
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ParseMode
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ParseMode, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, InputMediaAnimation
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 
@@ -31,7 +32,8 @@ else:
 
 
 # In-memory per-chat state
-pending_media = {}  # chat_id -> list of (type, file_id, original_caption, filename)
+# chat_id -> list of (type, file_id, original_caption, filename, file_size, user_info)
+pending_media = {}
 pending_job = {}  # chat_id -> Job
 
 
@@ -105,80 +107,149 @@ def _format_file_size(bytes_size):
         return f"{bytes_size / (1024 * 1024 * 1024):.2f} GB"
 
 
-def forward_to_database(context: CallbackContext, msg, media_type, file_id):
-    """Forward media to database channel with user info"""
+def _get_user_info(msg):
+    """Extract user info from message"""
+    user = msg.from_user
+    user_name = user.first_name
+    if user.last_name:
+        user_name += f" {user.last_name}"
+    user_id = user.id
+    user_username = user.username
+    return {
+        'name': user_name,
+        'id': user_id,
+        'username': user_username
+    }
+
+
+def _build_album_caption(items, date_str):
+    """Build caption for the first media in album with all media info"""
+    if not items:
+        return ""
+    
+    # Get user info from first item
+    first_user = items[0][5]  # user_info is at index 5
+    if first_user['username']:
+        user_line = f"👤 ᴜsᴇʀ: {first_user['name']} (@{first_user['username']}) ({first_user['id']})"
+    else:
+        user_line = f"👤 ᴜsᴇʀ: {first_user['name']} ({first_user['id']})"
+    
+    caption_parts = []
+    caption_parts.append(f"📦 ᴀʟʙᴜᴍ ᴡɪᴛʜ {len(items)} ᴍᴇᴅɪᴀ")
+    caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
+    
+    # Add file list
+    for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(items, 1):
+        formatted_size = _format_file_size(file_size)
+        caption_parts.append(f"{idx}. {filename} ({formatted_size})")
+    
+    caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
+    caption_parts.append(user_line)
+    caption_parts.append(f"📅 ᴅᴀᴛᴇ: {date_str}")
+    
+    # Check for original captions
+    original_captions = [item[2] for item in items if item[2]]
+    if original_captions:
+        caption_parts.append("━━━━━━━━━━━━━━━━━━━━━━")
+        caption_parts.append("📝 ᴏʀɪɢɪɴᴀʟ ᴄᴀᴘᴛɪᴏɴs:")
+        for cap in original_captions[:3]:  # Limit to first 3 to avoid caption length limit
+            caption_parts.append(f"• {cap[:100]}")  # Truncate long captions
+    
+    final_caption = "\n".join(caption_parts)
+    # Telegram caption limit is 1024 chars
+    if len(final_caption) > 1024:
+        final_caption = final_caption[:1020] + "..."
+    return final_caption
+
+
+def forward_album_to_database(context: CallbackContext, items):
+    """Forward media as album to database channel"""
     if not DB_CHANNEL_ID:
         logger.warning("DB_CHANNEL_ID not set - skipping database forward")
         return
     
+    if not items:
+        return
+    
     try:
-        user = msg.from_user
-        user_name = user.first_name
-        if user.last_name:
-            user_name += f" {user.last_name}"
-        user_id = user.id
-        user_username = user.username
-        
-        # Get filename and file size
-        filename = _get_filename(msg, media_type)
-        file_size = _get_file_size(msg, media_type)
-        formatted_size = _format_file_size(file_size)
-        
-        # Get current date
         date_str = datetime.now().strftime("%Y-%m-%d")
-
-        # Build our info block (standardized)
-        if user_username:
-            user_line = f"👤 ᴜsᴇʀ: {user_name} (@{user_username}) ({user_id})"
-        else:
-            user_line = f"👤 ᴜsᴇʀ: {user_name} ({user_id})"
-
-        info_block = (
-            f"📂 ɴᴀᴍᴇ: {filename}\n"
-            f"📦 sɪᴢᴇ: {formatted_size}\n"
-            f"{user_line}\n"
-            f"📅 ᴅᴀᴛᴇ: {date_str}"
-        )
-
-        # Preserve original caption if present; otherwise send only our info block
-        original_caption = msg.caption or ""
-        if original_caption:
-            lines = original_caption.splitlines()
-            first_line = lines[0]
-            rest_lines = "\n".join(lines[1:]) if len(lines) > 1 else ""
-
-            blocks = [f"📂 original caption: {first_line}", "━━━━━━━━━━━━━━━━━━━━━━"]
-            if rest_lines:
-                blocks.append(rest_lines)
-                blocks.append("━━━━━━━━━━━━━━━━━━━━━━")
+        
+        # Separate groupable and non-groupable media
+        groupable_items = []  # photos and videos only
+        non_groupable_items = []  # documents, audio, voice, animation
+        
+        for item in items:
+            typ = item[0]
+            if typ in ("photo", "video"):
+                groupable_items.append(item)
             else:
-                blocks.append("━━━━━━━━━━━━━━━━━━━━━━")
-
-            blocks.append("neko info:")
-            blocks.append(info_block)
-            caption = "\n".join(blocks)
-        else:
-            caption = info_block
+                non_groupable_items.append(item)
         
-        logger.info(f"Forwarding {media_type} to database channel {DB_CHANNEL_ID}")
+        # Send groupable items as albums (max 10 per album)
+        chunk_size = 10
+        for i in range(0, len(groupable_items), chunk_size):
+            chunk = groupable_items[i:i + chunk_size]
+            media_group = []
+            
+            # Build caption for first item only
+            album_caption = _build_album_caption(chunk, date_str)
+            
+            for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(chunk):
+                try:
+                    # Only first item gets caption
+                    caption = album_caption if idx == 0 else None
+                    
+                    if typ == "photo":
+                        media_group.append(InputMediaPhoto(media=file_id, caption=caption))
+                    elif typ == "video":
+                        media_group.append(InputMediaVideo(media=file_id, caption=caption))
+                except Exception as e:
+                    logger.exception(f"Failed to prepare media for DB: {e}")
+            
+            if media_group:
+                try:
+                    context.bot.send_media_group(chat_id=DB_CHANNEL_ID, media=media_group)
+                    logger.info(f"Successfully forwarded album of {len(media_group)} items to database channel")
+                    time.sleep(0.5)  # Small delay between albums to avoid rate limits
+                except Exception as e:
+                    logger.exception(f"Failed to send album to database channel: {e}")
         
-        # Forward based on media type
-        if media_type == "photo":
-            context.bot.send_photo(chat_id=DB_CHANNEL_ID, photo=file_id, caption=caption)
-        elif media_type == "video":
-            context.bot.send_video(chat_id=DB_CHANNEL_ID, video=file_id, caption=caption)
-        elif media_type == "document":
-            context.bot.send_document(chat_id=DB_CHANNEL_ID, document=file_id, caption=caption)
-        elif media_type == "animation":
-            context.bot.send_animation(chat_id=DB_CHANNEL_ID, animation=file_id, caption=caption)
-        elif media_type == "audio":
-            context.bot.send_audio(chat_id=DB_CHANNEL_ID, audio=file_id, caption=caption)
-        elif media_type == "voice":
-            context.bot.send_voice(chat_id=DB_CHANNEL_ID, voice=file_id, caption=caption)
-        
-        logger.info(f"Successfully forwarded {media_type} to database channel")
+        # Send non-groupable items individually with caption
+        for typ, file_id, original_caption, filename, file_size, user_info in non_groupable_items:
+            try:
+                # Build single item caption
+                formatted_size = _format_file_size(file_size)
+                if user_info['username']:
+                    user_line = f"👤 ᴜsᴇʀ: {user_info['name']} (@{user_info['username']}) ({user_info['id']})"
+                else:
+                    user_line = f"👤 ᴜsᴇʀ: {user_info['name']} ({user_info['id']})"
+                
+                caption = (
+                    f"📂 ɴᴀᴍᴇ: {filename}\n"
+                    f"📦 sɪᴢᴇ: {formatted_size}\n"
+                    f"{user_line}\n"
+                    f"📅 ᴅᴀᴛᴇ: {date_str}"
+                )
+                
+                if original_caption:
+                    caption = f"📝 ᴄᴀᴘᴛɪᴏɴ: {original_caption[:200]}\n━━━━━━━━━━━━━━━━━━━━━━\n{caption}"
+                
+                if typ == "document":
+                    context.bot.send_document(chat_id=DB_CHANNEL_ID, document=file_id, caption=caption)
+                elif typ == "animation":
+                    context.bot.send_animation(chat_id=DB_CHANNEL_ID, animation=file_id, caption=caption)
+                elif typ == "audio":
+                    context.bot.send_audio(chat_id=DB_CHANNEL_ID, audio=file_id, caption=caption)
+                elif typ == "voice":
+                    context.bot.send_voice(chat_id=DB_CHANNEL_ID, voice=file_id, caption=caption)
+                
+                logger.info(f"Successfully forwarded {typ} to database channel")
+                time.sleep(0.3)  # Small delay to avoid rate limits
+            except Exception as e:
+                logger.exception(f"Failed to forward {typ} to database channel: {e}")
+    
     except Exception as e:
-        logger.exception(f"Failed to forward to database channel: {e}")
+        logger.exception(f"Failed to forward album to database channel: {e}")
 
 
 def save_media(update: Update, context: CallbackContext):
@@ -215,10 +286,13 @@ def save_media(update: Update, context: CallbackContext):
         return
 
     filename = _get_filename(msg, media_type)
-    _append_media(chat_id, (media_type, file_id, original_caption, filename))
+    file_size = _get_file_size(msg, media_type)
+    user_info = _get_user_info(msg)
     
-    # Forward to database channel
-    forward_to_database(context, msg, media_type, file_id)
+    # Store all info needed for later forwarding
+    _append_media(chat_id, (media_type, file_id, original_caption, filename, file_size, user_info))
+    
+    logger.info(f"Received {media_type} from user {user_info['id']} - queued for processing")
 
     # Cancel any existing job
     job = pending_job.get(chat_id)
@@ -274,7 +348,13 @@ def handle_text(update: Update, context: CallbackContext):
         if items:
             from telegram import ReplyKeyboardRemove
             update.message.reply_text(f"📚 Creating album from {len(items)} media...", reply_markup=ReplyKeyboardRemove())
+            
+            # Send album to user
             send_media_as_album(context, chat_id)
+            
+            # Forward to database channel as album
+            items_copy = list(items)  # Copy before clearing
+            forward_album_to_database(context, items_copy)
         else:
             update.message.reply_text("No media found. Send media first.")
         return
@@ -285,33 +365,44 @@ def send_media_with_mode(context: CallbackContext, chat_id: int, mode: str, user
 
 
 def send_media_as_album(context: CallbackContext, chat_id: int):
-    """Send media as albums with max 10 items per group"""
-    from telegram import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, InputMediaAnimation
-    
+    """Send media as albums with max 10 items per group, caption on first item only"""
     items = pending_media.get(chat_id, [])
     if not items:
         return
     
-    # Group items into chunks of 10
+    # Separate groupable and non-groupable media
+    groupable_items = []  # photos and videos only
+    non_groupable_items = []  # documents, audio, voice, animation
+    
+    for item in items:
+        typ = item[0]
+        if typ in ("photo", "video"):
+            groupable_items.append(item)
+        else:
+            non_groupable_items.append(item)
+    
+    # Send groupable items as albums (max 10 per album)
     chunk_size = 10
-    for i in range(0, len(items), chunk_size):
-        chunk = items[i:i + chunk_size]
+    for i in range(0, len(groupable_items), chunk_size):
+        chunk = groupable_items[i:i + chunk_size]
         media_group = []
         
-        for typ, file_id, original_caption, filename in chunk:
+        # Get caption from first item that has one, use it as album caption
+        album_caption = None
+        for item in chunk:
+            if item[2]:  # original_caption at index 2
+                album_caption = item[2]
+                break
+        
+        for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(chunk):
             try:
+                # Only first item gets caption (becomes album caption)
+                caption = album_caption if idx == 0 else None
+                
                 if typ == "photo":
-                    media_group.append(InputMediaPhoto(media=file_id))
+                    media_group.append(InputMediaPhoto(media=file_id, caption=caption))
                 elif typ == "video":
-                    media_group.append(InputMediaVideo(media=file_id))
-                elif typ == "document":
-                    media_group.append(InputMediaDocument(media=file_id))
-                elif typ == "animation":
-                    media_group.append(InputMediaAnimation(media=file_id))
-                elif typ == "audio":
-                    media_group.append(InputMediaAudio(media=file_id))
-                elif typ == "voice":
-                    context.bot.send_voice(chat_id=chat_id, voice=file_id)
+                    media_group.append(InputMediaVideo(media=file_id, caption=caption))
             except Exception as e:
                 logger.exception("Failed to prepare media: %s", e)
         
@@ -319,8 +410,24 @@ def send_media_as_album(context: CallbackContext, chat_id: int):
         if media_group:
             try:
                 context.bot.send_media_group(chat_id=chat_id, media=media_group)
+                time.sleep(0.3)  # Small delay between albums
             except Exception as e:
                 logger.exception("Failed to send media group: %s", e)
+    
+    # Send non-groupable items individually
+    for typ, file_id, original_caption, filename, file_size, user_info in non_groupable_items:
+        try:
+            if typ == "document":
+                context.bot.send_document(chat_id=chat_id, document=file_id, caption=original_caption)
+            elif typ == "animation":
+                context.bot.send_animation(chat_id=chat_id, animation=file_id, caption=original_caption)
+            elif typ == "audio":
+                context.bot.send_audio(chat_id=chat_id, audio=file_id, caption=original_caption)
+            elif typ == "voice":
+                context.bot.send_voice(chat_id=chat_id, voice=file_id, caption=original_caption)
+            time.sleep(0.2)
+        except Exception as e:
+            logger.exception(f"Failed to send {typ}: %s", e)
     
     pending_media.pop(chat_id, None)
 
