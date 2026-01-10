@@ -495,13 +495,23 @@ def send_media_as_album(context: CallbackContext, chat_id: int):
         chunk = groupable_items[i:i + chunk_size]
         media_group = []
         
-        # Use Neko Album Maker caption with clickable link
-        neko_caption = '<a href="https://t.me/NekoAlbumMakerbot"><b>💜 Neko Album Maker</b></a>'
+        # Check if any media in this chunk has a caption - use the first one found
+        user_caption = None
+        for item in chunk:
+            if item[2]:  # original_caption is at index 2
+                user_caption = item[2]
+                break
+        
+        # Use user's caption if available, otherwise use Neko Album Maker caption
+        if user_caption:
+            album_caption = user_caption
+        else:
+            album_caption = '<a href="https://t.me/NekoAlbumMakerbot"><b>💜 Neko Album Maker</b></a>'
         
         for idx, (typ, file_id, original_caption, filename, file_size, user_info) in enumerate(chunk):
             try:
                 # Only first item gets caption (becomes album caption)
-                caption = neko_caption if idx == 0 else None
+                caption = album_caption if idx == 0 else None
                 
                 if typ == "photo":
                     media_group.append(InputMediaPhoto(media=file_id, caption=caption, parse_mode='HTML'))
@@ -521,17 +531,20 @@ def send_media_as_album(context: CallbackContext, chat_id: int):
     # Send non-groupable items individually
     for typ, file_id, original_caption, filename, file_size, user_info in non_groupable_items:
         try:
-            # Use Neko Album Maker caption for non-groupable items too
-            neko_caption = '<a href="https://t.me/NekoAlbumMakerbot"><b>💜 Neko Album Maker</b></a>'
+            # Use user's original caption if available, otherwise use Neko Album Maker caption
+            if original_caption:
+                item_caption = original_caption
+            else:
+                item_caption = '<a href="https://t.me/NekoAlbumMakerbot"><b>💜 Neko Album Maker</b></a>'
             
             if typ == "document":
-                context.bot.send_document(chat_id=chat_id, document=file_id, caption=neko_caption, parse_mode='HTML')
+                context.bot.send_document(chat_id=chat_id, document=file_id, caption=item_caption, parse_mode='HTML')
             elif typ == "animation":
-                context.bot.send_animation(chat_id=chat_id, animation=file_id, caption=neko_caption, parse_mode='HTML')
+                context.bot.send_animation(chat_id=chat_id, animation=file_id, caption=item_caption, parse_mode='HTML')
             elif typ == "audio":
-                context.bot.send_audio(chat_id=chat_id, audio=file_id, caption=neko_caption, parse_mode='HTML')
+                context.bot.send_audio(chat_id=chat_id, audio=file_id, caption=item_caption, parse_mode='HTML')
             elif typ == "voice":
-                context.bot.send_voice(chat_id=chat_id, voice=file_id, caption=neko_caption, parse_mode='HTML')
+                context.bot.send_voice(chat_id=chat_id, voice=file_id, caption=item_caption, parse_mode='HTML')
             time.sleep(0.2)
         except Exception as e:
             logger.exception(f"Failed to send {typ}: %s", e)
